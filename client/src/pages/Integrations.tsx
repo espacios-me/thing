@@ -1,8 +1,10 @@
 import { useAuth } from "@/_core/hooks/useAuth";
-import { Button } from "@/components/ui/button";
-import { useLocation } from "wouter";
-import { ArrowLeft, Trash2, CheckCircle, Circle } from "lucide-react";
+import { getIntegrationConnectUrl } from "@/const";
 import { trpc } from "@/lib/trpc";
+import { ArrowLeft, CheckCircle2, Trash2 } from "lucide-react";
+import { useEffect } from "react";
+import { toast } from "sonner";
+import { useLocation } from "wouter";
 
 const AVAILABLE_SERVICES = [
   { id: "google", name: "Google", icon: "🔵", description: "Gmail, Drive, Calendar" },
@@ -12,111 +14,154 @@ const AVAILABLE_SERVICES = [
   { id: "instagram", name: "Instagram", icon: "📷", description: "Posts, Stories" },
   { id: "whatsapp", name: "WhatsApp", icon: "💬", description: "Messages, Media" },
   { id: "botspace", name: "Botspace", icon: "🤖", description: "Conversations" },
-];
+] as const;
 
 export default function IntegrationsPage() {
   const { user } = useAuth();
   const [, navigate] = useLocation();
-
+  const utils = trpc.useUtils();
   const { data: integrations = [], isLoading } = trpc.integrations.list.useQuery();
 
-  const connectedServices = new Set(integrations.map((i) => i.service));
+  const upsertIntegration = trpc.integrations.upsert.useMutation({
+    onSuccess: async () => {
+      await utils.integrations.list.invalidate();
+    },
+  });
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("integration_status");
+    const service = params.get("service");
+
+    if (!status || !service) return;
+
+    if (status === "connected") {
+      toast.success(`${service} connected successfully`);
+      void utils.integrations.list.invalidate();
+    } else {
+      toast.error(params.get("error") || `${service} connection failed`);
+    }
+
+    const url = new URL(window.location.href);
+    ["integration_status", "service", "error"].forEach((key) => {
+      url.searchParams.delete(key);
+    });
+    window.history.replaceState({}, "", url.toString());
+  }, [utils.integrations.list]);
+
+  const connectedServices = new Set(
+    integrations.filter((integration) => integration.isActive).map((integration) => integration.service),
+  );
 
   const handleConnect = (service: string) => {
-    // TODO: Implement OAuth flow for each service
-    alert(`Connecting to ${service}... (Feature coming soon)`);
+    if (!user) {
+      toast.error("Please sign in first");
+      return;
+    }
+
+    const url = getIntegrationConnectUrl(service);
+    if (!url) {
+      toast.error(`${service} OAuth is not configured`);
+      return;
+    }
+
+    window.location.href = url;
   };
 
-  const handleDisconnect = (service: string) => {
-    if (confirm(`Disconnect from ${service}?`)) {
-      // TODO: Implement disconnection logic
-      alert(`Disconnected from ${service}`);
+  const handleDisconnect = async (service: string) => {
+    if (!window.confirm(`Disconnect ${service}?`)) return;
+
+    try {
+      await upsertIntegration.mutateAsync({ service, isActive: false });
+      toast.success(`${service} disconnected`);
+    } catch (error) {
+      console.error(error);
+      toast.error(`Failed to disconnect ${service}`);
     }
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <div className="bg-card border-b border-border px-6 py-4">
-        <div className="flex items-center gap-4 mb-4">
-          <Button variant="ghost" size="sm" onClick={() => navigate("/dashboard")}>
-            <ArrowLeft className="w-4 h-4 mr-2" />
+    <main className="min-h-screen bg-zinc-950 text-zinc-100">
+      <header className="border-b border-zinc-800 bg-zinc-900/70 backdrop-blur">
+        <div className="mx-auto max-w-6xl px-6 py-6">
+          <button
+            type="button"
+            onClick={() => navigate("/dashboard")}
+            className="inline-flex items-center gap-2 rounded-md border border-zinc-700 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-800"
+          >
+            <ArrowLeft className="h-4 w-4" />
             Back
-          </Button>
-          <h1 className="text-2xl font-bold text-foreground">Connected Services</h1>
+          </button>
+          <h1 className="mt-4 text-3xl font-semibold">Integration Hub</h1>
+          <p className="mt-2 text-sm text-zinc-400">
+            Connect your social and email accounts with OAuth to sync memories automatically.
+          </p>
         </div>
-        <p className="text-sm text-muted-foreground">
-          Connect your favorite services to sync data and create memories automatically.
-        </p>
-      </div>
+      </header>
 
-      {/* Content */}
-      <div className="p-6">
+      <section className="mx-auto max-w-6xl px-6 py-8">
         {isLoading ? (
-          <div className="text-center text-muted-foreground py-12">Loading integrations...</div>
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-8 text-center text-zinc-400">
+            Loading integrations...
+          </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {AVAILABLE_SERVICES.map((service) => {
               const isConnected = connectedServices.has(service.id);
+
               return (
-                <div
+                <article
                   key={service.id}
-                  className={`bg-card border rounded-lg p-6 transition-all ${
-                    isConnected ? "border-primary" : "border-border hover:border-primary/50"
+                  className={`rounded-xl border p-5 ${
+                    isConnected ? "border-emerald-500/60 bg-zinc-900" : "border-zinc-800 bg-zinc-900/60"
                   }`}
                 >
-                  <div className="flex items-start justify-between mb-4">
+                  <div className="mb-4 flex items-start justify-between">
                     <div className="flex items-center gap-3">
-                      <span className="text-3xl">{service.icon}</span>
+                      <span className="text-3xl" aria-hidden>
+                        {service.icon}
+                      </span>
                       <div>
-                        <h3 className="font-semibold text-foreground">{service.name}</h3>
-                        <p className="text-xs text-muted-foreground">{service.description}</p>
+                        <h2 className="text-lg font-medium">{service.name}</h2>
+                        <p className="text-xs text-zinc-400">{service.description}</p>
                       </div>
                     </div>
-                    {isConnected && <CheckCircle className="w-5 h-5 text-primary" />}
+                    {isConnected && <CheckCircle2 className="h-5 w-5 text-emerald-400" />}
                   </div>
 
-                  <div className="flex gap-2">
-                    {isConnected ? (
-                      <>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="flex-1"
-                          onClick={() => alert("Sync feature coming soon")}
-                        >
-                          Sync Now
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDisconnect(service.id)}
-                          className="text-destructive hover:text-destructive"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </>
-                    ) : (
-                      <Button
-                        className="w-full"
-                        onClick={() => handleConnect(service.id)}
+                  {isConnected ? (
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled
+                        className="flex-1 rounded-md border border-zinc-700 px-3 py-2 text-sm text-zinc-400"
                       >
-                        Connect
-                      </Button>
-                    )}
-                  </div>
-
-                  {isConnected && (
-                    <p className="text-xs text-muted-foreground mt-3">
-                      Last synced: {new Date().toLocaleDateString()}
-                    </p>
+                        Sync coming soon
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDisconnect(service.id)}
+                        disabled={upsertIntegration.isPending}
+                        className="rounded-md border border-red-900/60 px-3 py-2 text-red-300 hover:bg-red-950/40 disabled:opacity-50"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleConnect(service.id)}
+                      className="w-full rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+                    >
+                      Connect with OAuth
+                    </button>
                   )}
-                </div>
+                </article>
               );
             })}
           </div>
         )}
-      </div>
-    </div>
+      </section>
+    </main>
   );
 }
