@@ -1,8 +1,11 @@
 import { useAuth } from "@/_core/hooks/useAuth";
+import { getIntegrationConnectUrl } from "@/const";
 import { Button } from "@/components/ui/button";
 import { useLocation } from "wouter";
-import { ArrowLeft, Trash2, CheckCircle, Circle } from "lucide-react";
+import { ArrowLeft, Trash2, CheckCircle } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { useEffect } from "react";
+import { toast } from "sonner";
 
 const AVAILABLE_SERVICES = [
   { id: "google", name: "Google", icon: "🔵", description: "Gmail, Drive, Calendar" },
@@ -12,25 +15,76 @@ const AVAILABLE_SERVICES = [
   { id: "instagram", name: "Instagram", icon: "📷", description: "Posts, Stories" },
   { id: "whatsapp", name: "WhatsApp", icon: "💬", description: "Messages, Media" },
   { id: "botspace", name: "Botspace", icon: "🤖", description: "Conversations" },
-];
+] as const;
 
 export default function IntegrationsPage() {
   const { user } = useAuth();
   const [, navigate] = useLocation();
+  const utils = trpc.useUtils();
 
   const { data: integrations = [], isLoading } = trpc.integrations.list.useQuery();
+  const upsertIntegrationMutation = trpc.integrations.upsert.useMutation({
+    onSuccess: async () => {
+      await utils.integrations.list.invalidate();
+    },
+  });
 
-  const connectedServices = new Set(integrations.map((i) => i.service));
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("integration_status");
+    const service = params.get("service");
+
+    if (!status || !service) return;
+
+    if (status === "connected") {
+      toast.success(`${service} connected successfully.`);
+      void utils.integrations.list.invalidate();
+    } else {
+      const errorMessage = params.get("error") || "OAuth authorization failed";
+      toast.error(`${service} connection failed: ${errorMessage}`);
+    }
+
+    const url = new URL(window.location.href);
+    url.searchParams.delete("integration_status");
+    url.searchParams.delete("service");
+    url.searchParams.delete("error");
+    window.history.replaceState({}, "", url.toString());
+  }, [utils.integrations.list]);
+
+  const connectedServices = new Set(
+    integrations.filter((integration) => integration.isActive).map((integration) => integration.service)
+  );
 
   const handleConnect = (service: string) => {
-    // TODO: Implement OAuth flow for each service
-    alert(`Connecting to ${service}... (Feature coming soon)`);
+    if (!user) {
+      toast.error("Please sign in before connecting a service.");
+      return;
+    }
+
+    const connectUrl = getIntegrationConnectUrl(service);
+
+    if (!connectUrl) {
+      toast.error(`Integration for ${service} is not configured yet.`);
+      return;
+    }
+
+    window.location.href = connectUrl;
   };
 
-  const handleDisconnect = (service: string) => {
-    if (confirm(`Disconnect from ${service}?`)) {
-      // TODO: Implement disconnection logic
-      alert(`Disconnected from ${service}`);
+  const handleDisconnect = async (service: string) => {
+    if (!confirm(`Disconnect from ${service}?`)) {
+      return;
+    }
+
+    try {
+      await upsertIntegrationMutation.mutateAsync({
+        service,
+        isActive: false,
+      });
+      toast.success(`${service} disconnected.`);
+    } catch (error) {
+      console.error("Failed to disconnect integration", error);
+      toast.error(`Failed to disconnect ${service}.`);
     }
   };
 
@@ -79,28 +133,21 @@ export default function IntegrationsPage() {
                   <div className="flex gap-2">
                     {isConnected ? (
                       <>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="flex-1"
-                          onClick={() => alert("Sync feature coming soon")}
-                        >
-                          Sync Now
+                        <Button variant="outline" size="sm" className="flex-1" disabled>
+                          Sync Coming Soon
                         </Button>
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => handleDisconnect(service.id)}
                           className="text-destructive hover:text-destructive"
+                          disabled={upsertIntegrationMutation.isPending}
                         >
                           <Trash2 className="w-4 h-4" />
                         </Button>
                       </>
                     ) : (
-                      <Button
-                        className="w-full"
-                        onClick={() => handleConnect(service.id)}
-                      >
+                      <Button className="w-full" onClick={() => handleConnect(service.id)}>
                         Connect
                       </Button>
                     )}
